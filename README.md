@@ -8,18 +8,17 @@ This DBOS workflow periodically check the healthiness of Transcation Director's 
 
 
 ```go
-for {
-    // Check the healthiness of clients
-    unhealthyClients := checkHealthiness()
+@DBOS.worflow()
+func autoscalingWorkflow {
+    for {
+        // Check the healthiness of clients
+        unhealthyClients := DBOS.runStep(checkHealthiness)
 
-    // Decommission unhealthy clients
-    for _, client := range unhealthyClients {
-        decommissionClient(client)
-    }
-
-    // Provision new clients if needed
-    for i := 0; i < len(unhealthyClients); i++ {
-        provisionNewClient()
+        // Replace unhealthy clients with new ones
+        foreach unhealthyClients {
+            DBOS.runStep(decommissionClient)
+            DBOS.runStep(provisionNewClient)
+        }
     }
 }
 ```
@@ -28,12 +27,12 @@ for {
 Checking clients healthiness:
 
 ```go
-func checkHealthiness() []Client {
-    unhealthyClients := []Client{}
-    for client := range clients {
-        // Use telemetry services to obtain congestion signal
-        congestionSignal := getCongestionSignal(client)
-        if congestionSignal > isCongested {
+@DBOS.step()
+func checkHealthiness() {
+    foreach clients {
+        // Use OpenTelemetry backends to obtain congestion signal
+        isCongested := DBOS.runStep(getCongestionSignal)
+        if isCongested {
             unhealthyClients = append(unhealthyClients, client)
         }
     }
@@ -45,9 +44,20 @@ func checkHealthiness() []Client {
 Provisioning new clients:
 
 ```go
+@DBOS.step()
 func provisionNewClient() {
     // Start machine
     // Trigger startup script (build JumpFire client, IBM ODM)
 }
 ```
 
+
+Obtaining congestion signals from OTLP backend
+
+```go
+@DBOS.step()
+func getCongestionSignal(client) {
+    // Query OTLP backend for congestion signal
+    // Return congestion signal value
+}
+```
