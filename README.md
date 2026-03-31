@@ -1,37 +1,32 @@
-# txd-dbos
-Transaction director with DBOS
+# Transaction Director with DBOS
 
+This repo contains a PoC implementation of Transaction Director's control plane using DBOS.
 
-# Autoscaling workflow
+## Autoscaling Workflow
 
-This DBOS workflow periodically check the healthiness of Transcation Director's clients, decommisioning unhealthy clients and provisioning new ones.
-
+This DBOS workflow periodically checks the health of Transaction Director's clients, decommissioning unhealthy ones and provisioning replacements.
 
 ```go
-@DBOS.worflow()
-func autoscalingWorkflow {
+// Main DBOS workflow for autoscaling
+func autoscalingWorkflow(clients) {
     for {
-        // Check the healthiness of clients
-        unhealthyClients := DBOS.runStep(checkHealthiness)
+        // Run the sub-workflow to collect unhealthy clients
+        unhealthyClients := dbos.runWorkflow(checkUnhealthyClients, clients)
 
-        // Replace unhealthy clients with new ones
-        foreach unhealthyClients {
-            DBOS.runStep(decommissionClient)
-            DBOS.runStep(provisionNewClient)
+        // Replace each unhealthy client with a new one
+        for client := range unhealthyClients {
+            dbos.runWorkflow(replaceClient, client)
         }
     }
 }
 ```
 
-
-Checking clients healthiness:
+The `checkUnhealthyClients` sub-workflow queries each client's congestion signal and returns those that are congested:
 
 ```go
-@DBOS.step()
-func checkHealthiness() {
-    foreach clients {
-        // Use OpenTelemetry backends to obtain congestion signal
-        isCongested := DBOS.runStep(getCongestionSignal)
+func checkUnhealthyClients(clients) {
+    for client := range clients {
+        isCongested := dbos.runStep(getCongestionSignal, client)
         if isCongested {
             unhealthyClients = append(unhealthyClients, client)
         }
@@ -40,24 +35,26 @@ func checkHealthiness() {
 }
 ```
 
-
-Provisioning new clients:
+Congestion signals are fetched in a DBOS step. Steps are ordinary functions — any external interaction should happen inside one:
 
 ```go
-@DBOS.step()
-func provisionNewClient() {
-    // Start machine
-    // Trigger startup script (build JumpFire client, IBM ODM)
+func getCongestionSignal(client) {
+    ...
+    return isCongested
 }
 ```
 
-
-Obtaining congestion signals from OTLP backend
+The `replaceClient` workflow decommissions the unhealthy client and brings up a replacement:
 
 ```go
-@DBOS.step()
-func getCongestionSignal(client) {
-    // Query OTLP backend for congestion signal
-    // Return congestion signal value
+func replaceClient(client) {
+    dbos.runStep(decommissionClient, client)
+
+    machine := dbos.runStep(startNewMachine, client)
+
+    // Trigger startup script (e.g., build JumpFire client)
+    newClient := dbos.runStep(runStartupScript, machine)
+
+    dbos.runStep(registerNewClient, newClient)
 }
 ```
