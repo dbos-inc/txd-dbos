@@ -9,16 +9,18 @@ This DBOS workflow periodically checks the health of Transaction Director's clie
 ```go
 // Main DBOS workflow for autoscaling
 func autoscalingWorkflow(clients) {
-    for {
-        // Run the sub-workflow to collect unhealthy clients
-        unhealthyClients := dbos.runWorkflow(checkUnhealthyClients, clients)
+    // Run the sub-workflow to collect unhealthy clients
+    unhealthyClients := dbos.runWorkflow(checkUnhealthyClients, clients)
 
-        // Replace each unhealthy client with a new one
-        for client := range unhealthyClients {
-            dbos.runWorkflow(replaceClient, client)
-        }
+    // Replace each unhealthy client with a new one
+    for client := range unhealthyClients {
+        dbos.runWorkflow(replaceClient, client)
     }
 }
+
+// Run it on a schedule
+dbos.RegisterWorkflow(autoscalingWorkflow,
+        dbos.WithSchedule("0 * * * * *")) // Run every minute
 ```
 
 The `checkUnhealthyClients` sub-workflow queries each client's congestion signal and returns those that are congested:
