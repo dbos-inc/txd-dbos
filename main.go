@@ -207,6 +207,7 @@ func main() {
 		DatabaseURL:        os.Getenv("DBOS_SYSTEM_DATABASE_URL"),
 		AppName:            "txd-dbos",
 		ApplicationVersion: "0.1.0",
+		AdminServer:        true, // required by DBOS Cloud (port 3001)
 		ConductorAPIKey:    os.Getenv("DBOS_CONDUCTOR_KEY"),
 	})
 	if err != nil {
