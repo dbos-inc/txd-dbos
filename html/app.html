@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <title>Transaction Director Autoscaling — DBOS</title>
+    <link
+      rel="icon"
+      href="https://dbos-blog-posts.s3.us-west-1.amazonaws.com/live-demo/favicon.ico"
+      type="image/x-icon"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .code-block {
+        background: #f6f8fa;
+        padding: 0.75em 0.25em 0.75em 0.75em;
+        font-size: 13px;
+        line-height: 1.5;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        overflow-x: auto;
+      }
+      .step-highlight {
+        background-color: #fff3b4;
+      }
+      .function-block {
+        display: block;
+        padding-left: 1em;
+      }
+      .code-line {
+        display: block;
+        white-space: pre;
+      }
+      .keyword { color: #e03444; }
+      .decorator { color: #953800; }
+      .function { color: #8957e5; }
+      .string { color: #0550ae; }
+      .comment { color: #6e7781; }
+      .punctuation { color: #24292f; }
+
+      .status-text {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        transition: all 0.2s;
+      }
+      .status-text .step {
+        display: block;
+        padding: 0.375rem 0.75rem;
+        border-left: 3px solid transparent;
+        transition: all 0.2s;
+      }
+      .status-text .step.pending {
+        color: #6b7280;
+        border-left-color: #e5e7eb;
+      }
+      .status-text .step.active {
+        color: #2563eb;
+        border-left-color: #3b82f6;
+        background-color: #eff6ff;
+      }
+      .status-text .step.recover {
+        color: #dc2626;
+        border-left-color: #ef4444;
+        background-color: #fef2f2;
+      }
+      .status-text .step.complete {
+        color: #059669;
+        border-left-color: #10b981;
+      }
+
+      @keyframes typing {
+        0% { content: ""; }
+        25% { content: "."; }
+        50% { content: ".."; }
+        75% { content: "..."; }
+        100% { content: ""; }
+      }
+      .status-text .step.active::after {
+        content: "";
+        animation: typing 2s infinite;
+      }
+      .status-text .step.recover::after {
+        content: "";
+        animation: typing 2s infinite;
+      }
+    </style>
+  </head>
+  <body class="font-sans text-gray-800 p-6">
+    <div class="max-w-3xl mx-auto">
+      <h1 class="text-xl font-semibold mb-4">Transaction Director Autoscaling</h1>
+      <div
+        id="reconnecting"
+        class="hidden mb-4 bg-yellow-100 p-2 rounded-md text-center flex items-center justify-center gap-2"
+      >
+        <svg class="animate-spin h-5 w-5 text-yellow-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <span class="text-yellow-700">Reconnecting...</span>
+      </div>
+      <p class="mb-4">
+        This DBOS workflow periodically checks the health of Transaction Director's
+        clients, decommissioning the unhealthy ones and provisioning replacements.
+        It runs <strong>every minute on a schedule</strong>, and can also be triggered
+        manually from the button below.
+      </p>
+      <p class="mb-4">
+        DBOS makes the loop <strong>resilient to any failure</strong>: workflow state
+        is durably persisted to Postgres, so if the process crashes mid-run it resumes
+        from the last completed step on the next launch.
+      </p>
+      <p class="mb-4">
+        Try it: launch a run, then crash the application while it's mid-flight.
+        When the app restarts, the workflow recovers and finishes the remaining client
+        replacements.
+      </p>
+    </div>
+
+    <div class="max-w-5xl mx-auto mb-8">
+      <div class="flex gap-12 items-start justify-center">
+        <div class="w-[640px]">
+          <div class="rounded-lg shadow-lg overflow-hidden">
+<pre class="code-block"><div class="phase-checking"><span class="code-line"><span class="comment">// Sub-workflow: returns the unhealthy clients</span></span><span class="code-line"><span class="keyword">func</span> <span class="function">checkUnhealthyClients</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> clients<span class="punctuation">)</span> <span class="punctuation">{</span></span><span class="code-line function-block">  <span class="keyword">for</span> client <span class="punctuation">:=</span> <span class="keyword">range</span> clients <span class="punctuation">{</span></span><span class="code-line function-block">    isCongested <span class="punctuation">:=</span> dbos.<span class="function">RunAsStep</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> getCongestionSignal<span class="punctuation">)</span></span><span class="code-line function-block">    <span class="keyword">if</span> isCongested <span class="punctuation">{</span> unhealthy <span class="punctuation">=</span> <span class="function">append</span><span class="punctuation">(</span>unhealthy<span class="punctuation">,</span> client<span class="punctuation">) }</span></span><span class="code-line function-block">  <span class="punctuation">}</span></span><span class="code-line function-block">  <span class="keyword">return</span> unhealthy</span><span class="code-line"><span class="punctuation">}</span></span></div><div> </div><div class="phase-replacing"><span class="code-line"><span class="comment">// Sub-workflow: replace one unhealthy client</span></span><span class="code-line"><span class="keyword">func</span> <span class="function">replaceClient</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> client<span class="punctuation">)</span> <span class="punctuation">{</span></span><span class="code-line function-block">  dbos.<span class="function">RunAsStep</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> decommissionClient<span class="punctuation">)</span></span><span class="code-line function-block">  machine    <span class="punctuation">:=</span> dbos.<span class="function">RunAsStep</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> startNewMachine<span class="punctuation">)</span></span><span class="code-line function-block">  newClient  <span class="punctuation">:=</span> dbos.<span class="function">RunAsStep</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> runStartupScript<span class="punctuation">)</span></span><span class="code-line function-block">  dbos.<span class="function">RunAsStep</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> registerNewClient<span class="punctuation">)</span></span><span class="code-line"><span class="punctuation">}</span></span></div><div> </div><span class="code-line"><span class="comment">// Main scheduled workflow: runs every minute</span></span><span class="code-line"><span class="keyword">func</span> <span class="function">autoscalingWorkflow</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> scheduledTime<span class="punctuation">)</span> <span class="punctuation">{</span></span><span class="code-line function-block phase-line-checking">  unhealthy <span class="punctuation">:=</span> dbos.<span class="function">RunWorkflow</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> checkUnhealthyClients<span class="punctuation">)</span></span><span class="code-line function-block phase-line-replacing">  <span class="keyword">for</span> client <span class="punctuation">:=</span> <span class="keyword">range</span> unhealthy <span class="punctuation">{</span></span><span class="code-line function-block phase-line-replacing">    dbos.<span class="function">RunWorkflow</span><span class="punctuation">(</span>ctx<span class="punctuation">,</span> replaceClient<span class="punctuation">,</span> client<span class="punctuation">)</span></span><span class="code-line function-block phase-line-replacing">  <span class="punctuation">}</span></span><span class="code-line"><span class="punctuation">}</span></span><span class="code-line"></span><span class="code-line">dbos.<span class="function">RegisterWorkflow</span><span class="punctuation">(</span>autoscalingWorkflow<span class="punctuation">,</span></span><span class="code-line">    dbos.<span class="function">WithSchedule</span><span class="punctuation">(</span><span class="string">"0 * * * * *"</span><span class="punctuation">))</span> <span class="comment">// every minute</span></span></pre>
+          </div>
+        </div>
+
+        <div class="w-80 flex flex-col justify-center items-start">
+          <div class="flex flex-col gap-4 mb-4 w-full">
+            <button
+              onclick="startBackgroundJob()"
+              class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded shadow transition duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
+            >
+              Launch the autoscaling loop
+            </button>
+            <button
+              onclick="crashApp()"
+              id="crash-button"
+              disabled
+              class="inline-block bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-6 rounded shadow transition duration-150 ease-in-out transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-opacity-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none disabled:hover:bg-red-600"
+            >
+              Crash the application
+            </button>
+          </div>
+          <div
+            id="status"
+            class="text-gray-600 bg-white rounded-lg shadow-sm border border-gray-100 p-2 mt-4 w-full status-text"
+          >
+            <div class="step pending" id="step-checking">▶ Detect unhealthy clients</div>
+            <div class="step pending" id="step-replacing">▶ Replace unhealthy clients</div>
+            <div class="step pending" id="step-done">▶ Done</div>
+          </div>
+          <div
+            id="summary"
+            class="text-sm text-gray-700 bg-white rounded-lg shadow-sm border border-gray-100 p-3 mt-3 w-full"
+          >
+            <div>Total clients: <span id="summary-total">—</span></div>
+            <div>Unhealthy detected: <span id="summary-unhealthy">—</span></div>
+            <div>Replaced so far: <span id="summary-replaced">—</span></div>
+            <div>Currently replacing: <span id="summary-current">—</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="max-w-3xl mx-auto">
+      <p class="mb-4">
+        The workflow is <strong>scheduled to run every minute</strong> via
+        <code class="bg-gray-100 px-2 py-1 rounded-md font-mono text-sm text-gray-700">dbos.WithSchedule("0 * * * * *")</code>.
+        Manually launching it from the button above triggers an extra ad-hoc run.
+      </p>
+      <p class="mb-4">
+        While a run is in flight, hit "Crash the application." When the process restarts
+        you'll see <code class="bg-gray-100 px-2 py-1 rounded-md font-mono text-sm text-gray-700">(Recovered pending workflows...)</code>
+        in the logs and the loop continues from the last completed step.
+      </p>
+      <p class="mb-4">
+        Check out the
+        <a href="https://docs.dbos.dev/golang/programming-guide" target="_blank" class="text-blue-600 hover:underline">programming guide</a>
+        to learn how to build with DBOS!
+      </p>
+    </div>
+
+    <script>
+      function generateRandomString() {
+        const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        return Array.from(crypto.getRandomValues(new Uint8Array(6)))
+          .map((x) => chars[x % chars.length])
+          .join("");
+      }
+
+      let currentId = null;
+
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlId = urlParams.get("id");
+      if (urlId && urlId.length > 0) {
+        currentId = urlId;
+        enableCrashButton();
+      }
+
+      checkProgress();
+      setInterval(checkProgress, 1500);
+
+      function showReconnecting() {
+        document.getElementById("reconnecting").classList.remove("hidden");
+      }
+      function hideReconnecting() {
+        document.getElementById("reconnecting").classList.add("hidden");
+      }
+
+      async function crashApp() {
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 100);
+          await fetch("/crash", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+        } catch (error) {}
+        await checkProgress();
+      }
+
+      function enableCrashButton() {
+        document.getElementById("crash-button").disabled = false;
+      }
+
+      async function startBackgroundJob() {
+        const randomString = generateRandomString();
+        const params = new URLSearchParams(window.location.search);
+        params.set("id", randomString);
+        window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+
+        currentId = randomString;
+        resetStatus();
+        await fetch(`/workflow/${currentId}`, { method: "GET" });
+        await checkProgress();
+        enableCrashButton();
+      }
+
+      function resetStatus() {
+        ["step-checking", "step-replacing", "step-done"].forEach((id) => {
+          const el = document.getElementById(id);
+          el.className = "step pending";
+        });
+        document.getElementById("step-checking").textContent = "▶ Detect unhealthy clients";
+        document.getElementById("step-replacing").textContent = "▶ Replace unhealthy clients";
+        document.getElementById("step-done").textContent = "▶ Done";
+        document.getElementById("summary-total").textContent = "—";
+        document.getElementById("summary-unhealthy").textContent = "—";
+        document.getElementById("summary-replaced").textContent = "—";
+        document.getElementById("summary-current").textContent = "—";
+      }
+
+      function clearHighlights() {
+        document.querySelectorAll(".step-highlight").forEach((el) => el.classList.remove("step-highlight"));
+      }
+
+      function applyPhaseHighlight(phase) {
+        clearHighlights();
+        if (phase === "checking") {
+          document.querySelector(".phase-checking")?.classList.add("step-highlight");
+          document.querySelectorAll(".phase-line-checking").forEach((el) => el.classList.add("step-highlight"));
+        } else if (phase === "replacing") {
+          document.querySelector(".phase-replacing")?.classList.add("step-highlight");
+          document.querySelectorAll(".phase-line-replacing").forEach((el) => el.classList.add("step-highlight"));
+        }
+      }
+
+      function setStep(id, state, label) {
+        const el = document.getElementById(id);
+        el.className = `step ${state}`;
+        el.textContent = label;
+      }
+
+      function renderProgress(p, error = false) {
+        document.getElementById("summary-total").textContent = p.totalClients ?? "—";
+        document.getElementById("summary-unhealthy").textContent = p.unhealthyCount ?? "—";
+        document.getElementById("summary-replaced").textContent = p.replacedCount ?? 0;
+        document.getElementById("summary-current").textContent = p.currentClient || "—";
+
+        const phase = p.phase || "";
+        applyPhaseHighlight(phase);
+
+        if (phase === "checking") {
+          setStep("step-checking", error ? "recover" : "active",
+            error ? "■ Disconnected" : "▶ Detecting unhealthy clients");
+          setStep("step-replacing", "pending", "▶ Replace unhealthy clients");
+          setStep("step-done", "pending", "▶ Done");
+        } else if (phase === "replacing") {
+          setStep("step-checking", "complete",
+            `✓ Detected ${p.unhealthyCount}/${p.totalClients} unhealthy`);
+          if (p.unhealthyCount === 0) {
+            setStep("step-replacing", "complete", "✓ Nothing to replace");
+          } else {
+            setStep("step-replacing", error ? "recover" : "active",
+              error ? "■ Disconnected" :
+              `▶ Replacing ${(p.replacedCount ?? 0) + 1}/${p.unhealthyCount}` +
+                (p.currentClient ? ` (${p.currentClient})` : ""));
+          }
+          setStep("step-done", "pending", "▶ Done");
+        } else if (phase === "done") {
+          setStep("step-checking", "complete",
+            `✓ Detected ${p.unhealthyCount}/${p.totalClients} unhealthy`);
+          setStep("step-replacing", "complete",
+            p.unhealthyCount === 0
+              ? "✓ Nothing to replace"
+              : `✓ Replaced ${p.replacedCount}/${p.unhealthyCount} clients`);
+          setStep("step-done", "complete", "✓ Done");
+          clearHighlights();
+        }
+      }
+
+      let lastProgress = { phase: "" };
+
+      async function checkProgress() {
+        if (!currentId) return;
+
+        try {
+          const response = await fetch(`/progress/${currentId}`);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const progress = await response.json();
+          lastProgress = progress;
+          renderProgress(progress);
+
+          if (progress.phase === "done") {
+            currentId = null;
+          }
+          hideReconnecting();
+        } catch (error) {
+          console.error("Error checking progress:", error);
+          showReconnecting();
+          renderProgress(lastProgress, true);
+        }
+      }
+    </script>
+  </body>
+</html>
