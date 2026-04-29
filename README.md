@@ -93,6 +93,14 @@ loop into your fleet.
    export DBOS_SYSTEM_DATABASE_URL="postgres://postgres:dbos@localhost:5432/txd_dbos"
    ```
 
+4. (Optional) Connect this app to [DBOS Conductor](https://docs.dbos.dev/production/self-hosting/conductor)
+   for hosted observability and remote control. Grab an API key from the Conductor
+   dashboard and export it before launching:
+   ```bash
+   export DBOS_CONDUCTOR_KEY="<your-conductor-api-key>"
+   ```
+   When `DBOS_CONDUCTOR_KEY` is unset the app runs fully standalone.
+
 ## Running the App
 
 ```bash
