@@ -74,6 +74,11 @@ run_workflow() {
   fi
   echo "  workflow: started, polling /progress (timeout ${TIMEOUT}s)..."
 
+  # Brief grace so the workflow can set its first "checking" event before we
+  # poll. Without it the first GET /progress races ahead of SetEvent and the
+  # app returns a (harmless) "getEvent timed out: no event found".
+  sleep "$POLL_INTERVAL"
+
   local deadline=$(( $(date +%s) + TIMEOUT ))
   while (( $(date +%s) < deadline )); do
     body="$(curl -s --max-time 5 "$BASE_URL/progress/$task_id")"
@@ -87,8 +92,13 @@ run_workflow() {
         progress="$(printf '%s' "$body" | extract_json currentClient)"
         echo "    phase=$phase ${progress:+client=$progress}" ;;
       *)
-        # error JSON or event not set yet; keep waiting
-        echo "    waiting... ${body:0:80}" ;;
+        # Event not set yet (workflow just starting) or a transient read error:
+        # both are expected during startup, so keep polling.
+        if printf '%s' "$body" | grep -q 'no event found\|TimeoutError'; then
+          echo "    waiting for first progress event..."
+        else
+          echo "    waiting... ${body:0:80}"
+        fi ;;
     esac
     sleep "$POLL_INTERVAL"
   done
