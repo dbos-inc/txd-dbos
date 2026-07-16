@@ -75,12 +75,25 @@ def cmd_nodes(args):
     if not nodes:
         print("No nodes returned.")
         return
+
     print(f"Nodes ({len(nodes)}):")
     for n in nodes:
-        node_id = n.get("node_id", n.get("id", "?"))
-        region = n.get("region_code", n.get("region", "?"))
-        status = n.get("status", n.get("liveness", "?"))
-        print(f"  - node {node_id:>3}  region={region:<14} status={status}")
+        name = n.get("name", "?")
+        region = n.get("region_name", "?")
+        status = n.get("status", "?")
+        print(f"  - {name:<22} region={region:<14} status={status}")
+
+    # Per-region roll-up: quick way to confirm a whole region is down.
+    by_region = {}
+    for n in nodes:
+        region = n.get("region_name", "?")
+        status = n.get("status", "?")
+        counts = by_region.setdefault(region, {})
+        counts[status] = counts.get(status, 0) + 1
+    print("By region:")
+    for region in sorted(by_region):
+        summary = ", ".join(f"{s}={c}" for s, c in sorted(by_region[region].items()))
+        print(f"  - {region:<14} {summary}")
 
 
 def cmd_disrupt(args):
