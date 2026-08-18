@@ -25,7 +25,7 @@ import urllib.request
 
 # The Mastercard/DBOS demo cluster from the runbook. Override with --cluster-id
 # or the CRDB_CLUSTER_ID env var.
-DEFAULT_CLUSTER_ID = "d4f0a251-c841-4a3e-bb9f-9131e090e508"
+DEFAULT_CLUSTER_ID = "df173fe3-9152-46c5-82c2-b659e1a8fdae"
 BASE_URL = "https://cockroachlabs.cloud/api/v1"
 
 
