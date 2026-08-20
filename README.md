@@ -114,3 +114,47 @@ ad-hoc run from the **Launch the autoscaling loop** button.
 To see DBOS recovery in action, hit **Crash the application** while a run is in
 flight. Restart the process — the workflow resumes from the last completed step
 and finishes the remaining client replacements.
+
+## Testing with CockroachDB
+
+The app also runs against a multi-region [CockroachDB Cloud](https://cockroachlabs.cloud)
+cluster, which is how the region-failover behavior in `main()` is exercised: a
+whole region is taken down with the Cloud disruption API while the workflow
+keeps completing.
+
+1. Point DBOS at the cluster instead of local Postgres. List **one host per
+   region** — pgx treats the extra hosts as fallbacks and fails over to them
+   automatically when a region goes dark:
+   ```bash
+   export DBOS_SYSTEM_DATABASE_URL="postgresql://<user>:<password>@<cluster>.aws-us-east-1.cockroachlabs.cloud:26257,<cluster>.aws-us-east-2.cockroachlabs.cloud:26257,<cluster>.aws-us-west-2.cockroachlabs.cloud:26257/txd_dbos"
+   ```
+
+2. Export the cluster ID and a Cloud API key so `crdb_disrupt.py` can drive the
+   disruption API (create the key under **Access Management → Service Accounts**
+   in the CockroachDB Cloud console):
+   ```bash
+   export CRDB_CLUSTER_ID="<your-cluster-uuid>"
+   export CRDB_API_KEY="<your-cockroachdb-cloud-api-key>"
+   ```
+
+3. Start the app as usual (`go run main.go`), then simulate a region outage in
+   another shell:
+   ```bash
+   ./crdb_disrupt.py nodes              # list nodes and per-region status
+   ./crdb_disrupt.py disrupt us-east-1  # take down a whole region
+   ./crdb_disrupt.py list               # show active disruptions
+   ./crdb_disrupt.py restore            # clear all disruptions
+   ```
+   The script refuses to disrupt a second region while another is already down
+   — this is a 3-region cluster and needs a quorum to stay writable.
+
+4. With the region down, confirm the workload keeps completing:
+   ```bash
+   ./check_app.sh -n 5
+   ```
+   Each cycle checks liveness and runs an autoscaling workflow to `done`. The
+   first request after a region drops may be slow (one connect timeout per
+   failed address) and then recovers as `main()` benches the dead addresses.
+
+Run `./crdb_disrupt.py restore` when you're finished so the cluster is left in
+a normal state.

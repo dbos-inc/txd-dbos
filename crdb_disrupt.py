@@ -5,10 +5,12 @@ Uses the CockroachDB Cloud disruption API to simulate a whole-region failure
 against a multi-region cluster, restore it, and list active disruptions. Handy
 for validating that a DBOS workload survives a region outage.
 
-Requires only the Python standard library. Auth comes from the CRDB_API_KEY
-environment variable (same as the curl examples).
+Requires only the Python standard library. The target cluster and auth come
+from the CRDB_CLUSTER_ID and CRDB_API_KEY environment variables (or the
+matching --cluster-id / --api-key flags).
 
 Examples:
+    export CRDB_CLUSTER_ID=...
     export CRDB_API_KEY=...
     ./crdb_disrupt.py list                 # show active disruptions
     ./crdb_disrupt.py nodes                # list cluster nodes
@@ -23,9 +25,6 @@ import sys
 import urllib.error
 import urllib.request
 
-# The Mastercard/DBOS demo cluster from the runbook. Override with --cluster-id
-# or the CRDB_CLUSTER_ID env var.
-DEFAULT_CLUSTER_ID = "df173fe3-9152-46c5-82c2-b659e1a8fdae"
 BASE_URL = "https://cockroachlabs.cloud/api/v1"
 
 
@@ -139,8 +138,8 @@ def build_parser():
     )
     parser.add_argument(
         "--cluster-id",
-        default=os.environ.get("CRDB_CLUSTER_ID", DEFAULT_CLUSTER_ID),
-        help="Cluster UUID (default: $CRDB_CLUSTER_ID or the demo cluster).",
+        default=os.environ.get("CRDB_CLUSTER_ID"),
+        help="Cluster UUID (default: $CRDB_CLUSTER_ID).",
     )
     parser.add_argument(
         "--api-key",
@@ -176,6 +175,8 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if not args.cluster_id:
+        sys.exit("error: no cluster ID. Set CRDB_CLUSTER_ID or pass --cluster-id.")
     if not args.api_key:
         sys.exit("error: no API key. Set CRDB_API_KEY or pass --api-key.")
 
