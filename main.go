@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sys/unix"
 )
 
 const PROGRESS_EVENT = "progress_event"
@@ -202,9 +207,64 @@ func registerNewClient(_ context.Context, client Client) (string, error) {
 /*****************************/
 
 func main() {
-	var err error
+	// DBOS_SYSTEM_DATABASE_URL lists one CockroachDB endpoint per region. pgx
+	// turns the extra hosts into fallbacks and walks them on every new
+	// connection, so failover is automatic -- but unbounded by default, which is
+	// why a disrupted region reads as a hang. Two bounds fix that: a short
+	// per-address connect timeout (us-east-1 alone resolves to six IPs, each
+	// getting its own timeout before pgx reaches us-east-2), and aggressive
+	// socket timeouts so connections already open when the region went dark die
+	// promptly instead of sitting in TCP retransmit for minutes.
+	config, err := pgxpool.ParseConfig(os.Getenv("DBOS_SYSTEM_DATABASE_URL"))
+	if err != nil {
+		panic(err)
+	}
+	config.ConnConfig.ConnectTimeout = time.Second
+	dialer := &net.Dialer{
+		Timeout:         time.Second,
+		KeepAliveConfig: net.KeepAliveConfig{Enable: true, Idle: 5 * time.Second, Interval: time.Second, Count: 3},
+		Control: func(_, _ string, c syscall.RawConn) error {
+			// Keepalives only fire on an idle socket, so they miss the case that
+			// matters most: a query in flight when the region stopped answering.
+			// TCP_USER_TIMEOUT caps retransmits of unacked data (Linux only).
+			return c.Control(func(fd uintptr) {
+				unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_USER_TIMEOUT, 5000)
+			})
+		},
+	}
+
+	// pgx keeps no memory of which hosts just failed, so it re-walks the whole
+	// fallback list on every new connection: with us-east-1 down, that measured
+	// 7s per connection and 35s to open five. Bench an address for 15s after a
+	// failed dial so only the first connection pays the timeout. The bench
+	// expires on its own, so the region rejoins rotation when it comes back.
+	var benchMu sync.Mutex
+	benched := make(map[string]time.Time)
+	config.ConnConfig.DialFunc = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		benchMu.Lock()
+		failedAt, ok := benched[addr]
+		benchMu.Unlock()
+		if ok && time.Since(failedAt) < 15*time.Second {
+			return nil, fmt.Errorf("skipping %s: dial failed %s ago", addr, time.Since(failedAt).Truncate(time.Millisecond))
+		}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			benchMu.Lock()
+			benched[addr] = time.Now()
+			benchMu.Unlock()
+		}
+		return conn, err
+	}
+	config.MinConns = 2 // keep connections warm so a workflow never starts by dialing
+
+	pool, err := pgxpool.NewWithConfig(context.Background(), config)
+	if err != nil {
+		panic(err)
+	}
+	defer pool.Close()
+
 	dbosCtx, err = dbos.NewDBOSContext(context.Background(), dbos.Config{
-		DatabaseURL:        os.Getenv("DBOS_SYSTEM_DATABASE_URL"),
+		SystemDBPool:       pool,
 		AppName:            "txd-dbos",
 		ApplicationVersion: "0.1.0",
 		AdminServer:        true, // required by DBOS Cloud (port 3001)
